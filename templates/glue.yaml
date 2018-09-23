@@ -1,0 +1,316 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template creates Glue tables and transformations
+Parameters:
+  S3STACK:
+    Type: String
+  CONFIGBUCKET:
+    Description: Bucket Name holding configuration artifacts
+    Type: String
+  DATASWAMPBUCKET:
+    Description: Bucket Name for data storage (output of S3 stack)
+    Type: String
+  
+  DATALAKEBUCKET:
+    Description: Bucket Name for data storage (output of S3 stack)
+    Type: String  
+    
+  GLUEDATABASENAME:
+    Type: String
+    Default: DB
+  
+  FILEPATH:
+    Type: String
+    Default: shelterluv
+
+Resources:
+  TempBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+    
+  Database:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId   
+      DatabaseInput:
+        Name: !Ref GLUEDATABASENAME	
+        Description: Database for all BFAS data lake tables
+  
+  
+  GlueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: ["sts:AssumeRole"]
+            Principal:
+              Service: ["glue.amazonaws.com"]
+      Path: /
+
+  GluePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-GluePolicy"
+      Roles:
+        - !Ref 'GlueRole'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - glue:*
+          - s3:GetBucketLocation
+          - s3:ListBucket
+          - s3:ListAllMyBuckets
+          - s3:GetBucketAcl
+          - ec2:DescribeVpcEndpoints
+          - ec2:DescribeRouteTables
+          - ec2:CreateNetworkInterface
+          - ec2:DeleteNetworkInterface
+          - ec2:DescribeNetworkInterfaces
+          - ec2:DescribeSecurityGroups
+          - ec2:DescribeSubnets
+          - ec2:DescribeVpcAttribute
+          - iam:ListRolePolicies
+          - iam:GetRole
+          - iam:GetRolePolicy
+          - cloudwatch:PutMetricData
+          Resource:
+          - "*"
+        - Effect: Allow
+          Action:
+          - s3:CreateBucket
+          Resource:
+          - arn:aws:s3:::aws-glue-*
+        - Effect: Allow
+          Action:
+          - s3:GetObject
+          - s3:PutObject
+          - s3:DeleteObject
+          Resource:
+          - arn:aws:s3:::aws-glue-*/*
+          - arn:aws:s3:::*/*aws-glue-*/*
+          - !Sub "${TempBucket.Arn}/*"
+          - !Sub 
+              - "${DataSwampBucketArn}/*"
+              - DataSwampBucketArn:
+                  Fn::ImportValue: !Sub "${S3STACK}-DataSwampBucketArn"
+          - !Sub 
+              - "${DataLakeBucketArn}/*"
+              - DataLakeBucketArn:
+                  Fn::ImportValue: !Sub "${S3STACK}-DataLakeBucketArn"        
+        - Effect: Allow
+          Action:
+          - s3:GetObject
+          Resource:
+          - arn:aws:s3:::crawler-public*
+          - arn:aws:s3:::aws-glue-*
+          - !Sub "arn:aws:s3:::${CONFIGBUCKET}/*"
+        - Effect: Allow
+          Action:
+          - logs:CreateLogGroup
+          - logs:CreateLogStream
+          - logs:PutLogEvents
+          Resource:
+          - arn:aws:logs:*:*:/aws-glue/*
+        - Effect: Allow
+          Action:
+          - ec2:CreateTags
+          - ec2:DeleteTags
+          Condition:
+            ForAllValues:StringEquals:
+              aws:TagKeys:
+              - aws-glue-service-resource
+          Resource:
+          - arn:aws:ec2:*:*:network-interface/*
+          - arn:aws:ec2:*:*:security-group/*
+          - arn:aws:ec2:*:*:instance/*
+        
+  # STAGE 0 Crawlers 0 scheduled to run every 15 minutes
+  # Completion of Stage 0 crawlers fires CloudWatch Events Rule, used to orchestrate
+  # downstream ETL jobs and additional crawlers.
+
+  SwampCrawler:
+    Type: AWS::Glue::Crawler 
+    Properties:
+      Role: !Ref GlueRole
+      Configuration: !Sub |
+        {
+          "Version": 1.0,
+          "CrawlerOutput": {
+            "Partitions": { "AddOrUpdateBehavior": "InheritFromTable" },
+            "Tables": { "AddOrUpdateBehavior": "MergeNewColumns" }
+          }
+        }
+      Description: "Crawler for ShelterLuv Stage 0 CSV files - output from SherlterLuv"
+      Schedule: 
+        ScheduleExpression: cron(0,15,30,45 * * * ? *)
+      
+      DatabaseName: !Ref GLUEDATABASENAME
+      Targets: 
+        S3Targets: 
+          - Path: !Sub "s3://${DATASWAMPBUCKET}/${FILEPATH}"
+            
+  # STAGE 1 Crawlers - started at end of ETL job scripts
+
+  LakeCrawler:
+    Type: AWS::Glue::Crawler 
+    Properties:
+      Role: !Ref GlueRole
+      Description: "Crawler for Data Lake"
+      DatabaseName: !Ref GLUEDATABASENAME
+      Targets: 
+        S3Targets: 
+          - Path: !Sub "s3://${DATALAKEBUCKET}/people/"
+            
+  # ETL Jobs
+
+  SwamptoLakePeople1:
+    Type: AWS::Glue::Job
+    Properties:
+      Role: !Ref GlueRole
+      DefaultArguments: {
+            "--job-bookmark-option": "job-bookmark-enable",
+            "--enable-metrics": "",
+            "--TempDir": !Sub "s3://${TempBucket}/01_SwamptoLake",
+            "--swampbucket": !Sub "${DATASWAMPBUCKET}",
+            "--lakebucket": !Sub "${DATALAKEBUCKET}",
+            "--gluedatabase": !Sub "${GLUEDATABASENAME}",
+            "--bfasdatalakecrawler": !Sub "${LakeCrawler}",
+            "--region": !Sub "${AWS::Region}"
+          }
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${CONFIGBUCKET}/glueetl/swamp_to_lake_people1"
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      MaxRetries: 0
+      AllocatedCapacity: 30
+
+  
+  # CloudWatch Events and Lambda used to orchestrate ETL
+
+  CrawlerSucceededRule:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: CloudWatch Events Rule for orchestrating crawlers and ETL jobs
+      EventPattern: 
+        source: 
+          - "aws.glue"
+        detail-type: 
+          - "Glue Crawler State Change"
+        detail: 
+          state: 
+            - "Succeeded"
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: 
+            Fn::GetAtt: 
+              - "OrchestrateETLFunction"
+              - "Arn"
+          Id: "OrchestrateETLFunction"
+
+  OrchestrateETLFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt OrchestrateETLFunctionRole.Arn
+      Runtime: python2.7
+      Timeout: 300
+      Code:
+        ZipFile: !Sub |
+            from __future__ import print_function
+            import json
+            import boto3
+            # define list of jobs to run after each crawler (when new data is found)
+            crawler2Jobs={
+                "${SwampCrawler}" : ["${SwamptoLakePeople1}"]
+                        }
+            def handler(event, context):
+                print(json.dumps(event))
+                crawlerName=event['detail']['crawlerName']
+                jobNames=crawler2Jobs.get(crawlerName,[])
+                if not jobNames:
+                    print("No ETL jobs defined for crawler {}".format(crawlerName))
+                else:
+                    print("Starting ETL jobs for crawler {}".format(crawlerName))
+                for jobName in jobNames:
+                    try:
+                        print("Starting ETL Job: {}".format(jobName))
+                        startJobRun(jobName)
+                    except Exception as e:
+                        print("Exception thrown: %s" % str(e))
+                        pass
+                print('Done')
+            def startJobRun(jobName):
+                client = boto3.client('glue')
+                client.start_job_run( JobName=jobName )
+                return
+
+  OrchestrateETLFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: Logs
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+      - PolicyName: Glue
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - glue:StartTrigger
+                - glue:StartCrawler
+                - glue:StartJobRun
+              Resource: '*'
+
+  PermissionForEventsToInvokeLambda: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: 
+        Ref: "OrchestrateETLFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "CrawlerSucceededRule"
+          - "Arn"
+
+  OrchestrateETLLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn: OrchestrateETLFunction
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${OrchestrateETLFunction}
+      RetentionInDays: 7
+
+
+Outputs:
+  GLUEDATABASENAME:
+    Description: Database Name
+    Value: !Ref GLUEDATABASENAME
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseName'

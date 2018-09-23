@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template creates an S3 Data bucket for the BFAS data swamp and one for BFAS data lake. It also creates a companion bucket for access logs.
+Resources:
+  LogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: LogDeliveryWrite 
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+  DataSwampBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AnalyticsConfigurations:
+        - Id: !Sub '${AWS::StackName}-Swamp'
+          StorageClassAnalysis:
+            DataExport: 
+              Destination: 
+                BucketArn: !Sub '${LogsBucket.Arn}'
+                Format: 'CSV'
+                Prefix: !Sub 'DataSwampBucket/'
+              OutputSchemaVersion: 'V_1'
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LoggingConfiguration:
+        DestinationBucketName: !Sub '${LogsBucket}'
+        LogFilePrefix: !Sub 'DataBucketAccessLogs/' 
+      Tags:
+      - Key: bucketcategory
+        Value: "swampbucket"
+  DataLakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AnalyticsConfigurations:
+        - Id: !Sub '${AWS::StackName}-Lake'
+          StorageClassAnalysis:
+            DataExport: 
+              Destination: 
+                BucketArn: !Sub '${LogsBucket.Arn}'
+                Format: 'CSV'
+                Prefix: !Sub 'DataLakeBucket/'
+              OutputSchemaVersion: 'V_1'
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LoggingConfiguration:
+        DestinationBucketName: !Sub '${LogsBucket}'
+        LogFilePrefix: !Sub 'DataBucketAccessLogs/'    
+Outputs:
+  DataSwampBucketName:
+    Value: !Ref 'DataSwampBucket'
+    Description: Name of the S3 Data bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-DataSwampBucketName'
+  DataLakeBucketName:
+    Value: !Ref 'DataLakeBucket'
+    Description: Name of the S3 Data bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-DataLakeBucketName'
+  LogsBucketName:
+    Value: !Ref 'LogsBucket'
+    Description: Name of the S3 Logs bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-LogsBucketName'
+  DataSwampBucketArn:
+    Value: !GetAtt 'DataSwampBucket.Arn'
+    Description: Arn of the S3 Data bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-DataSwampBucketArn'
+  DataLakeBucketArn:
+    Value: !GetAtt 'DataLakeBucket.Arn'
+    Description: Arn of the S3 Data bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-DataLakeBucketArn'
+  LogsBucketArn:
+    Value: !GetAtt 'LogsBucket.Arn'
+    Description: Arn of the S3 Logs bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-LogsBucketArn'
+  

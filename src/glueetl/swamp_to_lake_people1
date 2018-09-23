@@ -1,0 +1,74 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.sql.functions  import *
+import boto3
+
+## @params: [JOB_NAME, region, bfasdatalakecrawler,gluedatabase]
+args = getResolvedOptions(sys.argv, ['JOB_NAME', 'region','bfasdatalakecrawler','lakebucket','gluedatabase'])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+print ("*****Arguments*****")
+print  args
+
+## @type: DataSource
+## @args: [database = "datalakedb", table_name = "swampbfasdatabucket", transformation_ctx = "datasource0"]
+## @return: datasource0
+## @inputs: []
+#datasource0 = glueContext.create_dynamic_frame.from_catalog(database = "datalakedb", table_name = "s3_dataswampbucket_79i39gg49sbl", transformation_ctx = "datasource0")
+# working****datasource0 = glueContext.create_dynamic_frame.from_catalog(database = "datalakedb", table_name = "shelterluvjson", transformation_ctx = "datasource0")
+datasource0 = glueContext.create_dynamic_frame.from_catalog(database = args['gluedatabase'], table_name = "shelterluv", transformation_ctx = "datasource0")
+#{'GLUEDATABASENAME': 'datalakedb', 'JOB_ID': 'j_f5d9c78a47a882698d81a867194eb714b126d8dae541b08d72d0dd4064ad326b', 'encryption_type': None, 'job_bookmark_option': 'job-bookmark-enable', 'RedshiftTempDir': 's3://glue-tempbucket-1vacxpbvtq10n/01_SwamptoLake', 'bfasdatalakecrawler': 'LakeCrawler-F2NLUrKFBIwt', 'databucket': 's3-datalakebucket-1onwi2lqurt6v', 'SECURITY_CONFIGURATION': None, 'TempDir': 's3://glue-tempbucket-1vacxpbvtq10n/01_SwamptoLake', 'JOB_NAME': 'SwamptoLakePeople1-ZKKQnPMZcrHL', 'JOB_RUN_ID': 'jr_9af76c704f805b1f6ee014b4aebceefd2584c456db4eaf2dad88a1aa32e977a8'}
+
+if (datasource0.count() == 0):
+    print("Dataframe empty - nothing to do!")
+    job.commit()
+    quit()
+## @type: ApplyMapping
+## @args: [mapping = [("edited date", "string", "edited date", "string"), ("name", "string", "name", "string"), ("street", "string", "street", "string"), ("city", "string", "city", "string"), ("state", "string", "state", "string"), ("zip code", "string", "zip code", "string"), ("phone", "string", "phone", "string"), ("primary email", "string", "primary email", "string")], transformation_ctx = "applymapping1"]
+## @return: applymapping1
+## @inputs: [frame = datasource0]
+print "****ApplyMapping*****"
+applymapping1 = ApplyMapping.apply(frame = datasource0, mappings = [("edited date", "string", "edited date", "string"), ("name", "string", "name", "string"), ("street", "string", "street", "string"), ("city", "string", "city", "string"), ("state", "string", "state", "string"), ("zip code", "string", "zip code", "string"), ("phone", "string", "phone", "string"), ("primary email", "string", "primary email", "string")], transformation_ctx = "applymapping1")
+print "****ApplyMapping complete*****"
+## @type: ResolveChoice
+## @args: [choice = "make_struct", transformation_ctx = "resolvechoice2"]
+## @return: resolvechoice2
+## @inputs: [frame = applymapping1]
+resolvechoice2 =  ResolveChoice.apply(frame = applymapping1, transformation_ctx = "resolvechoice2",specs = [('zip code','cast:long')])
+## @type: DropNullFields
+## @args: [transformation_ctx = "dropnullfields3"]
+## @return: dropnullfields3
+## @inputs: [frame = resolvechoice2]
+print "****DropNullFields*****"
+dropnullfields3 = DropNullFields.apply(frame = resolvechoice2, transformation_ctx = "dropnullfields3")
+print "****DropNullFields completed*****"
+## @type: DataSink
+## @return: datasink4
+## @inputs: [frame = dropnullfields3]
+
+print "****Applying name split*****"
+df=dropnullfields3.toDF() \
+    .withColumn('firstname', split(col('name'), "\s").getItem(0)) \
+    .withColumn('lastname', split(col('name'), "\s").getItem(1))
+  
+ 
+addnamessplit = DynamicFrame.fromDF(df,glueContext,"addnamessplit")
+print "****Name split complete*****"
+datasink = glueContext.write_dynamic_frame.from_options(frame = addnamessplit, connection_type = "s3", connection_options = {"path": "s3://{}/people/".format(args['lakebucket'])}, format = "parquet", transformation_ctx = "datasink")
+print "****Name split complete. Printing schema*****"
+datasink.printSchema()
+  
+# run datalake crawler
+print "*****Starting data lake crawler*******"
+client=boto3.client('glue', region_name=args['region'])
+client.start_crawler(Name=args['bfasdatalakecrawler'])
+job.commit()
+print "*****Data lake crawler completed. Job committed******"
