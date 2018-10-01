@@ -1,0 +1,16 @@
+#! /bin/bash
+
+for f in include/*;do source $f; done
+SWAMPBUCKET=$PROJECT-$ENVIRONMENT-$S3SWAMPBUCKET
+LAKEBUCKET=$PROJECT-$ENVIRONMENT-$S3LAKEBUCKET
+ETLBUCKET=$PROJECT-$ENVIRONMENT-$S3ETLBUCKET
+
+STACKNAME=$BFASDATASTACK$ENVIRONMENT
+TEMPLATE=../templates/bfasdatastack.yaml
+EXTRAARGS="--parameters \
+  ParameterKey=ETLBUCKET,ParameterValue=$ETLBUCKET\
+  ParameterKey=DATASWAMPBUCKET,ParameterValue=$SWAMPBUCKET\
+  ParameterKey=DATALAKEBUCKET,ParameterValue=$LAKEBUCKET\
+ "
+
+stack_action $1  
