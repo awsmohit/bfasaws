@@ -1,27 +1,58 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: This template creates Glue tables and transformations
 Parameters:
-  S3STACK:
+  BFASDATASTACK:
+    Description: Stack that defines IAM roles for Glue and Lambda fucntions
     Type: String
-  CONFIGBUCKET:
-    Description: Bucket Name holding configuration artifacts
+  ETLBUCKET:
+    Description: Bucket Name holding ETL code artifacts
     Type: String
   DATASWAMPBUCKET:
-    Description: Bucket Name for data storage (output of S3 stack)
+    Description: Bucket Name for lake data storage
     Type: String
   
   DATALAKEBUCKET:
-    Description: Bucket Name for data storage (output of S3 stack)
+    Description: Bucket Name for swamp data storage
     Type: String  
-    
-  GLUEDATABASENAME:
+ 
+  GLUEDATALAKEDB:
+    Description: Name of Glue database holding data lake information
     Type: String
-    Default: DB
-  
-  FILEPATH:
+    Default: datalakedb
+    
+  GLUEDATASWAMPDB:
+    Description: Name of Glue database holding data swamp information
+    Type: String
+    Default: dataswampdb
+    
+  SWAMPFOLDERPATH:
     Type: String
     Default: shelterluv
-
+  
+  LAKEFOLDERPATH:
+    Type: String
+    Default: people
+  
+  SWAMPCRAWLER:
+    Type: String
+    Default: bfas-sandbox-glue-crawler-swamp
+  
+  LAKECRAWLER:
+    Type: String
+    Default: bfas-sandbox-glue-crawler-lake
+  
+  GLUEDATALAKEDB:
+    Type: String
+    Default: bfas-sandbox-glue-database-swamp
+  
+  GLUEDATASWAMPDB:
+    Type: String
+    Default: bfas-sandbox-glue-database-lake
+  ETLNAME:
+    Type: String
+    Default: bfas-sandbox-glue-etl-people
+  
+ 
 Resources:
   TempBucket:
     Type: AWS::S3::Bucket
@@ -31,114 +62,31 @@ Resources:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
     
-  Database:
+  BfasSwampDatabase:
     Type: AWS::Glue::Database
     Properties:
       CatalogId: !Ref AWS::AccountId   
       DatabaseInput:
-        Name: !Ref GLUEDATABASENAME	
+        Name: !Ref GLUEDATASWAMPDB	
+        Description: Database for all BFAS data swamp tables
+  
+  BfasLakeDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId   
+      DatabaseInput:
+        Name: !Ref GLUEDATALAKEDB	
         Description: Database for all BFAS data lake tables
-  
-  
-  GlueRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Action: ["sts:AssumeRole"]
-            Principal:
-              Service: ["glue.amazonaws.com"]
-      Path: /
-
-  GluePolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: !Sub "${AWS::StackName}-GluePolicy"
-      Roles:
-        - !Ref 'GlueRole'
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-        - Effect: Allow
-          Action:
-          - glue:*
-          - s3:GetBucketLocation
-          - s3:ListBucket
-          - s3:ListAllMyBuckets
-          - s3:GetBucketAcl
-          - ec2:DescribeVpcEndpoints
-          - ec2:DescribeRouteTables
-          - ec2:CreateNetworkInterface
-          - ec2:DeleteNetworkInterface
-          - ec2:DescribeNetworkInterfaces
-          - ec2:DescribeSecurityGroups
-          - ec2:DescribeSubnets
-          - ec2:DescribeVpcAttribute
-          - iam:ListRolePolicies
-          - iam:GetRole
-          - iam:GetRolePolicy
-          - cloudwatch:PutMetricData
-          Resource:
-          - "*"
-        - Effect: Allow
-          Action:
-          - s3:CreateBucket
-          Resource:
-          - arn:aws:s3:::aws-glue-*
-        - Effect: Allow
-          Action:
-          - s3:GetObject
-          - s3:PutObject
-          - s3:DeleteObject
-          Resource:
-          - arn:aws:s3:::aws-glue-*/*
-          - arn:aws:s3:::*/*aws-glue-*/*
-          - !Sub "${TempBucket.Arn}/*"
-          - !Sub 
-              - "${DataSwampBucketArn}/*"
-              - DataSwampBucketArn:
-                  Fn::ImportValue: !Sub "${S3STACK}-DataSwampBucketArn"
-          - !Sub 
-              - "${DataLakeBucketArn}/*"
-              - DataLakeBucketArn:
-                  Fn::ImportValue: !Sub "${S3STACK}-DataLakeBucketArn"        
-        - Effect: Allow
-          Action:
-          - s3:GetObject
-          Resource:
-          - arn:aws:s3:::crawler-public*
-          - arn:aws:s3:::aws-glue-*
-          - !Sub "arn:aws:s3:::${CONFIGBUCKET}/*"
-        - Effect: Allow
-          Action:
-          - logs:CreateLogGroup
-          - logs:CreateLogStream
-          - logs:PutLogEvents
-          Resource:
-          - arn:aws:logs:*:*:/aws-glue/*
-        - Effect: Allow
-          Action:
-          - ec2:CreateTags
-          - ec2:DeleteTags
-          Condition:
-            ForAllValues:StringEquals:
-              aws:TagKeys:
-              - aws-glue-service-resource
-          Resource:
-          - arn:aws:ec2:*:*:network-interface/*
-          - arn:aws:ec2:*:*:security-group/*
-          - arn:aws:ec2:*:*:instance/*
-        
   # STAGE 0 Crawlers 0 scheduled to run every 15 minutes
   # Completion of Stage 0 crawlers fires CloudWatch Events Rule, used to orchestrate
-  # downstream ETL jobs and additional crawlers.
 
-  SwampCrawler:
+  BfasSwampCrawler:
     Type: AWS::Glue::Crawler 
     Properties:
-      Role: !Ref GlueRole
+      Role : { "Fn::ImportValue" : {"Fn::Sub": "${BFASDATASTACK}-oGlueRoleArn"  } }
+      
+      Name: !Ref SWAMPCRAWLER	
+      #bfas-sandbox-glue-crawler-swamp
       Configuration: !Sub |
         {
           "Version": 1.0,
@@ -147,53 +95,56 @@ Resources:
             "Tables": { "AddOrUpdateBehavior": "MergeNewColumns" }
           }
         }
-      Description: "Crawler for ShelterLuv Stage 0 CSV files - output from SherlterLuv"
-      Schedule: 
-        ScheduleExpression: cron(0,15,30,45 * * * ? *)
-      
-      DatabaseName: !Ref GLUEDATABASENAME
+      Description: "Crawler for ShelterLuv Stage 0 files - output from SherlterLuv"
+      DatabaseName: !Ref GLUEDATASWAMPDB
       Targets: 
         S3Targets: 
-          - Path: !Sub "s3://${DATASWAMPBUCKET}/${FILEPATH}"
+          - Path: !Sub "s3://${DATASWAMPBUCKET}/${SWAMPFOLDERPATH}"
             
-  # STAGE 1 Crawlers - started at end of ETL job scripts
+ # STAGE 1 Crawlers - started at end of ETL job scripts
 
-  LakeCrawler:
-    Type: AWS::Glue::Crawler 
+  BfasLakeCrawler:
+    Type: AWS::Glue::Crawler
     Properties:
-      Role: !Ref GlueRole
+      Role : { "Fn::ImportValue" : {"Fn::Sub": "${BFASDATASTACK}-oGlueRoleArn"  } }
+      
+      Name: !Ref LAKECRAWLER	
+      #bfas-sandbox-glue-crawler-lake
       Description: "Crawler for Data Lake"
-      DatabaseName: !Ref GLUEDATABASENAME
+      DatabaseName: !Ref GLUEDATALAKEDB
       Targets: 
         S3Targets: 
-          - Path: !Sub "s3://${DATALAKEBUCKET}/people/"
-            
+          - Path: !Sub "s3://${DATALAKEBUCKET}/${LAKEFOLDERPATH}"
   # ETL Jobs
 
   SwamptoLakePeople1:
     Type: AWS::Glue::Job
     Properties:
-      Role: !Ref GlueRole
+      Role : { "Fn::ImportValue" : {"Fn::Sub": "${BFASDATASTACK}-oGlueRoleArn"  } }
+      
+      Name: !Ref ETLNAME	
+      #bfas-sandbox-glue-etl-people
       DefaultArguments: {
             "--job-bookmark-option": "job-bookmark-enable",
             "--enable-metrics": "",
             "--TempDir": !Sub "s3://${TempBucket}/01_SwamptoLake",
             "--swampbucket": !Sub "${DATASWAMPBUCKET}",
             "--lakebucket": !Sub "${DATALAKEBUCKET}",
-            "--gluedatabase": !Sub "${GLUEDATABASENAME}",
-            "--bfasdatalakecrawler": !Sub "${LakeCrawler}",
-            "--region": !Sub "${AWS::Region}"
+            "--gluedatalakedb": !Sub "${GLUEDATALAKEDB}",
+            "--gluedataswampdb": !Sub "${GLUEDATASWAMPDB}",
+            "--bfaslakecrawler": !Sub "${BfasLakeCrawler}",
+            "--bfasswampcrawler": !Sub "${BfasSwampCrawler}",
+            "--region": !Sub "${AWS::Region}",
+            "--extra-py-files": !Sub "s3://${ETLBUCKET}/libs/nameparser.zip"
           }
       Command:
         Name: glueetl
-        ScriptLocation: !Sub "s3://${CONFIGBUCKET}/glueetl/swamp_to_lake_people1"
+        ScriptLocation: !Sub "s3://${ETLBUCKET}/glueetl/swamp_to_lake_people1"
       ExecutionProperty:
         MaxConcurrentRuns: 1
       MaxRetries: 0
       AllocatedCapacity: 30
-
-  
-  # CloudWatch Events and Lambda used to orchestrate ETL
+# CloudWatch Events and Lambda used to orchestrate ETL
 
   CrawlerSucceededRule:
     Type: AWS::Events::Rule
@@ -220,7 +171,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       Handler: index.handler
-      Role: !GetAtt OrchestrateETLFunctionRole.Arn
+      Role : { "Fn::ImportValue" : {"Fn::Sub": "${BFASDATASTACK}-oLambdaETLRoleArn"  } }
       Runtime: python2.7
       Timeout: 300
       Code:
@@ -230,7 +181,7 @@ Resources:
             import boto3
             # define list of jobs to run after each crawler (when new data is found)
             crawler2Jobs={
-                "${SwampCrawler}" : ["${SwamptoLakePeople1}"]
+                "${BfasSwampCrawler}" : ["${SwamptoLakePeople1}"]
                         }
             def handler(event, context):
                 print(json.dumps(event))
@@ -253,41 +204,7 @@ Resources:
                 client.start_job_run( JobName=jobName )
                 return
 
-  OrchestrateETLFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-        - Effect: Allow
-          Principal:
-            Service:
-            - lambda.amazonaws.com
-          Action:
-          - sts:AssumeRole
-      Path: "/"
-      Policies:
-      - PolicyName: Logs
-        PolicyDocument:
-          Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - logs:CreateLogGroup
-                - logs:CreateLogStream
-                - logs:PutLogEvents
-              Resource: '*'
-      - PolicyName: Glue
-        PolicyDocument:
-          Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - glue:StartTrigger
-                - glue:StartCrawler
-                - glue:StartJobRun
-              Resource: '*'
-
+  
   PermissionForEventsToInvokeLambda: 
     Type: AWS::Lambda::Permission
     Properties: 
@@ -306,11 +223,16 @@ Resources:
     Properties:
       LogGroupName: !Sub /aws/lambda/${OrchestrateETLFunction}
       RetentionInDays: 7
-
-
+          
 Outputs:
-  GLUEDATABASENAME:
+  LAKEDATABASENAME:
     Description: Database Name
-    Value: !Ref GLUEDATABASENAME
+    Value: !Ref GLUEDATALAKEDB
     Export:
-      Name: !Sub '${AWS::StackName}-DatabaseName'
+      Name: !Sub '${AWS::StackName}-BfasLakeDatabase'
+   
+  SWAMPDATABASENAME:
+    Description: Database Name
+    Value: !Ref GLUEDATASWAMPDB
+    Export:
+      Name: !Sub '${AWS::StackName}-BfasSwampDatabase'

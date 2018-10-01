@@ -1,5 +1,22 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: This template creates an S3 Data bucket for the BFAS data swamp and one for BFAS data lake. It also creates a companion bucket for access logs.
+Parameters:
+  PROJECT:
+    Description: Project name
+    Type: String
+  ENVIRONMENT:
+    Description: Environment
+    Type: String
+  ETLBUCKET:
+    Description: Bucket Name holding ETL code artifacts
+    Type: String
+  DATASWAMPBUCKET:
+    Description: Bucket Name for lake data storage
+    Type: String
+  
+  DATALAKEBUCKET:
+    Description: Bucket Name for swamp data storage
+    Type: String    
 Resources:
   LogsBucket:
     Type: AWS::S3::Bucket
@@ -12,15 +29,7 @@ Resources:
   DataSwampBucket:
     Type: AWS::S3::Bucket
     Properties:
-      AnalyticsConfigurations:
-        - Id: !Sub '${AWS::StackName}-Swamp'
-          StorageClassAnalysis:
-            DataExport: 
-              Destination: 
-                BucketArn: !Sub '${LogsBucket.Arn}'
-                Format: 'CSV'
-                Prefix: !Sub 'DataSwampBucket/'
-              OutputSchemaVersion: 'V_1'
+      BucketName: !Sub "${DATASWAMPBUCKET}"
       BucketEncryption: 
         ServerSideEncryptionConfiguration: 
           - ServerSideEncryptionByDefault:
@@ -34,22 +43,31 @@ Resources:
   DataLakeBucket:
     Type: AWS::S3::Bucket
     Properties:
-      AnalyticsConfigurations:
-        - Id: !Sub '${AWS::StackName}-Lake'
-          StorageClassAnalysis:
-            DataExport: 
-              Destination: 
-                BucketArn: !Sub '${LogsBucket.Arn}'
-                Format: 'CSV'
-                Prefix: !Sub 'DataLakeBucket/'
-              OutputSchemaVersion: 'V_1'
+      BucketName: !Sub "${DATALAKEBUCKET}"
       BucketEncryption: 
         ServerSideEncryptionConfiguration: 
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
       LoggingConfiguration:
         DestinationBucketName: !Sub '${LogsBucket}'
-        LogFilePrefix: !Sub 'DataBucketAccessLogs/'    
+        LogFilePrefix: !Sub 'DataBucketAccessLogs/'
+      Tags:
+      - Key: bucketcategory
+        Value: "lakebucket"
+  ETLBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ETLBUCKET}"
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LoggingConfiguration:
+        DestinationBucketName: !Sub '${LogsBucket}'
+        LogFilePrefix: !Sub 'DataBucketAccessLogs/'
+      Tags:
+      - Key: bucketcategory
+        Value: "etlbucket"       
 Outputs:
   DataSwampBucketName:
     Value: !Ref 'DataSwampBucket'
@@ -61,6 +79,12 @@ Outputs:
     Description: Name of the S3 Data bucket
     Export:
       Name: !Sub '${AWS::StackName}-DataLakeBucketName'
+  ETLBucketName:
+    Value: !Ref 'ETLBucket'
+    Description: Name of the S3 Data bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-ETLBucketName'
+
   LogsBucketName:
     Value: !Ref 'LogsBucket'
     Description: Name of the S3 Logs bucket
@@ -76,6 +100,11 @@ Outputs:
     Description: Arn of the S3 Data bucket
     Export:
       Name: !Sub '${AWS::StackName}-DataLakeBucketArn'
+  ETLBucketArn:
+    Value: !GetAtt 'ETLBucket.Arn'
+    Description: Arn of the S3 Data bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-ETLBucketArn'
   LogsBucketArn:
     Value: !GetAtt 'LogsBucket.Arn'
     Description: Arn of the S3 Logs bucket

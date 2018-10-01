@@ -2,6 +2,16 @@
 
 for f in include/*;do source $f; done
 
-STACKNAME=$S3STACK
-TEMPLATE=../templates/s3.yaml
+SWAMPBUCKET=$PROJECT-$ENVIRONMENT-$S3SWAMPBUCKET
+LAKEBUCKET=$PROJECT-$ENVIRONMENT-$S3LAKEBUCKET
+ETLBUCKET=$PROJECT-$ENVIRONMENT-$S3ETLBUCKET
+STACKNAME=$S3STACK$ENVIRONMENT
+TEMPLATE="../templates/s3.yaml"
+EXTRAARGS="--parameters \
+  ParameterKey=PROJECT,ParameterValue=$PROJECT\
+  ParameterKey=ENVIRONMENT,ParameterValue=$ENVIRONMENT\
+  ParameterKey=ETLBUCKET,ParameterValue=$ETLBUCKET\
+  ParameterKey=DATASWAMPBUCKET,ParameterValue=$SWAMPBUCKET\
+  ParameterKey=DATALAKEBUCKET,ParameterValue=$LAKEBUCKET\
+  "
 stack_action $1

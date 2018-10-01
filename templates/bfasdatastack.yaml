@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template creates appropriate roles for the glue jobs and crawlers used for BFAS data lake.
+Parameters:
+  ETLBUCKET:
+    Description: Bucket Name holding ETL code artifacts
+    Type: String
+  DATASWAMPBUCKET:
+    Description: Bucket Name for lake data storage
+    Type: String
+  
+  DATALAKEBUCKET:
+    Description: Bucket Name for swamp data storage
+    Type: String  
+Resources:
+  oGlueRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action: ["sts:AssumeRole"]
+              Principal:
+                Service: ["glue.amazonaws.com"]
+        Path: /
+
+  GluePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-GluePolicy"
+      Roles:
+        - !Ref 'oGlueRole'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - glue:*
+          - s3:GetBucketLocation
+          - s3:ListBucket
+          - s3:ListAllMyBuckets
+          - s3:GetBucketAcl
+          - ec2:DescribeVpcEndpoints
+          - ec2:DescribeRouteTables
+          - ec2:CreateNetworkInterface
+          - ec2:DeleteNetworkInterface
+          - ec2:DescribeNetworkInterfaces
+          - ec2:DescribeSecurityGroups
+          - ec2:DescribeSubnets
+          - ec2:DescribeVpcAttribute
+          - iam:ListRolePolicies
+          - iam:GetRole
+          - iam:GetRolePolicy
+          - cloudwatch:PutMetricData
+          Resource:
+          - "*"
+        - Effect: Allow
+          Action:
+          - s3:CreateBucket
+          Resource:
+          - arn:aws:s3:::aws-glue-*
+        - Effect: Allow
+          Action:
+          - s3:GetObject
+          - s3:PutObject
+          - s3:DeleteObject
+          Resource:
+          - arn:aws:s3:::aws-glue-*/*
+          - arn:aws:s3:::*/*aws-glue-*/*
+          - !Sub "arn:aws:s3:::${ETLBUCKET}/*"
+          - !Sub "arn:aws:s3:::${DATALAKEBUCKET}/*"
+          - !Sub "arn:aws:s3:::${DATASWAMPBUCKET}/*"
+        - Effect: Allow
+          Action:
+          - s3:GetObject
+          Resource:
+          - arn:aws:s3:::crawler-public*
+          - arn:aws:s3:::aws-glue-*
+          - !Sub "arn:aws:s3:::${ETLBUCKET}/*"
+        - Effect: Allow
+          Action:
+          - logs:CreateLogGroup
+          - logs:CreateLogStream
+          - logs:PutLogEvents
+          Resource:
+          - arn:aws:logs:*:*:/aws-glue/*
+        - Effect: Allow
+          Action:
+          - ec2:CreateTags
+          - ec2:DeleteTags
+          Condition:
+            ForAllValues:StringEquals:
+              aws:TagKeys:
+              - aws-glue-service-resource
+          Resource:
+          - arn:aws:ec2:*:*:network-interface/*
+          - arn:aws:ec2:*:*:security-group/*
+          - arn:aws:ec2:*:*:instance/*
+     
+  oLambdaETLRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+            - sts:AssumeRole
+        Path: "/"
+        Policies:
+        - PolicyName: Logs
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+        - PolicyName: Glue
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:StartTrigger
+                  - glue:StartCrawler
+                  - glue:StartJobRun
+                Resource: '*'
+Outputs:
+    oGlurRoleName:
+      Description: Glue Role
+      Value: !Ref oGlueRole
+      Export:
+        Name: !Sub '${AWS::StackName}-oGlueRole'
+    
+    oLambdaETLRoleName:
+      Description: ETL Orchestration Role
+      Value: !Ref oLambdaETLRole
+      Export:
+        Name: !Sub '${AWS::StackName}-oLambdaETLRole'
+        
+    oGlurRoleArn:
+      Value: !GetAtt 'oGlueRole.Arn'
+      Description: Arn of the Glue Role
+      Export:
+        Name: !Sub '${AWS::StackName}-oGlueRoleArn'
+    oLambdaETLRoleArn:
+      Value: !GetAtt 'oLambdaETLRole.Arn'
+      Description: Arn of the Lambda ETL role
+      Export:
+        Name: !Sub '${AWS::StackName}-oLambdaETLRoleArn'    
